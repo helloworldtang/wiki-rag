@@ -1,0 +1,7 @@
+storage/
+wiki/*.md
+!wiki/.gitkeep
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
