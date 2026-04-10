@@ -84,6 +84,8 @@ class TestCompile:
 
     def test_compile_calls_llm_for_new_file(self, tmp_path, monkeypatch):
         from src.wiki_rag import compile_raw_to_wiki
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+        monkeypatch.setattr("src.wiki_rag.DEEPSEEK_API_KEY", "test-key")
 
         raw_file = tmp_path / "raw" / "new-topic.md"
         raw_file.parent.mkdir()
@@ -98,11 +100,13 @@ class TestCompile:
         monkeypatch.setattr("src.wiki_rag.META_FILE", meta_file)
         monkeypatch.setattr("src.wiki_rag.WIKI_DIR", wiki_dir)
 
-        # Mock ollama.Client
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock(message=MagicMock(content="# New Topic\nCompiled content\n\n## 总结\nDone"))]
         mock_client = MagicMock()
-        mock_client.chat.return_value = {"message": {"content": "# New Topic\nCompiled content\n\n## 总结\nThis is about new topic"}}
+        mock_client.chat.completions.create.return_value = mock_resp
+        mock_openai = MagicMock(return_value=mock_client)
 
-        with patch("ollama.Client", return_value=mock_client):
+        with patch("openai.OpenAI", mock_openai):
             result = compile_raw_to_wiki(raw_file)
 
         assert result is not None
@@ -112,6 +116,8 @@ class TestCompile:
 
     def test_compile_force_recompiles(self, tmp_path, monkeypatch):
         from src.wiki_rag import compile_raw_to_wiki, file_hash
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+        monkeypatch.setattr("src.wiki_rag.DEEPSEEK_API_KEY", "test-key")
 
         raw_file = tmp_path / "raw" / "test.md"
         raw_file.parent.mkdir()
@@ -128,10 +134,13 @@ class TestCompile:
         monkeypatch.setattr("src.wiki_rag.META_FILE", meta_file)
         monkeypatch.setattr("src.wiki_rag.WIKI_DIR", wiki_dir)
 
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock(message=MagicMock(content="# Test\nNew compiled content"))]
         mock_client = MagicMock()
-        mock_client.chat.return_value = {"message": {"content": "# Test\nNew compiled content"}}
+        mock_client.chat.completions.create.return_value = mock_resp
+        mock_openai = MagicMock(return_value=mock_client)
 
-        with patch("ollama.Client", return_value=mock_client):
+        with patch("openai.OpenAI", mock_openai):
             result = compile_raw_to_wiki(raw_file, force=True)
 
         assert result is not None
@@ -182,28 +191,35 @@ class TestQuery:
 
     def test_query_with_empty_index(self, tmp_path, monkeypatch):
         from src.wiki_rag import query
-
         monkeypatch.setattr("src.wiki_rag.STORAGE_DIR", tmp_path / "nonexistent")
-        result = query("test question", query_engine=None)
+        result = query("test question")
         assert "知识库为空" in result
 
 
 class TestAdd:
     """添加条目"""
 
-    def test_add_creates_raw_file(self, tmp_path, monkeypatch):
-        from src.wiki_rag import cmd_add
+    def test_add_smart_creates_files(self, tmp_path, monkeypatch):
+        from src.wiki_rag import cmd_add_smart
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+        monkeypatch.setattr("src.wiki_rag.DEEPSEEK_API_KEY", "test-key")
 
         raw_dir = tmp_path / "raw"
         monkeypatch.setattr("src.wiki_rag.RAW_DIR", raw_dir)
 
-        cmd_add("My Topic", "Some content here")
+        mock_resp = MagicMock()
+        mock_resp.choices = [MagicMock(message=MagicMock(
+            content='[{"title": "主题A", "content": "内容A"}, {"title": "主题B", "content": "内容B"}]'
+        ))]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_resp
+        mock_openai = MagicMock(return_value=mock_client)
 
-        filepath = raw_dir / "my-topic.md"
-        assert filepath.exists()
-        content = filepath.read_text()
-        assert "My Topic" in content
-        assert "Some content here" in content
+        with patch("openai.OpenAI", mock_openai):
+            created = cmd_add_smart("一段包含多个主题的文本")
+
+        assert len(created) == 2
+        assert (raw_dir / "主题a.md").exists() or len(list(raw_dir.glob("*.md"))) == 2
 
 
 class TestRawDataExists:
