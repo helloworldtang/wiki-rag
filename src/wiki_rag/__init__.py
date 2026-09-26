@@ -22,6 +22,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -63,7 +64,7 @@ CHUNK_SIZE = 512
 TOP_K = 5
 
 
-def get_llm_client():
+def get_llm_client() -> dict[str, Any]:
     """获取LLM客户端。默认使用DeepSeek API，可通过环境变量切换到本地Ollama"""
     if USE_LOCAL_LLM:
         import ollama
@@ -92,7 +93,7 @@ def llm_chat(prompt: str, system: str = "你是一个知识管理专家。") -> 
             ],
             temperature=0.3,
         )
-        return resp.choices[0].message.content
+        return str(resp.choices[0].message.content)
     else:
         resp = llm["client"].chat(
             model=llm["model"],
@@ -102,10 +103,10 @@ def llm_chat(prompt: str, system: str = "你是一个知识管理专家。") -> 
             ],
             stream=False,
         )
-        return resp["message"]["content"]
+        return str(resp["message"]["content"])
 
 
-def get_embed_client():
+def get_embed_client() -> Any:
     """获取Embedding客户端（始终使用本地Ollama）"""
     import ollama
     return ollama.Client()
@@ -137,18 +138,20 @@ def file_hash(filepath: Path) -> str:
     return hashlib.md5(filepath.read_bytes()).hexdigest()
 
 
-def load_meta() -> dict:
+def load_meta() -> dict[str, Any]:
     if META_FILE.exists():
-        return json.loads(META_FILE.read_text())
+        data = json.loads(META_FILE.read_text())
+        if isinstance(data, dict):
+            return data
     return {"compiled": {}}
 
 
-def save_meta(meta: dict):
+def save_meta(meta: dict[str, Any]) -> None:
     META_FILE.parent.mkdir(parents=True, exist_ok=True)
     META_FILE.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
 
-def compile_raw_to_wiki(raw_file: Path, force: bool = False, meta: dict | None = None) -> Path | None:
+def compile_raw_to_wiki(raw_file: Path, force: bool = False, meta: dict[str, Any] | None = None) -> Path | None:
     """编译单个raw文件。未变化（hash一致且wiki存在）返回None，否则返回wiki文件路径"""
     if meta is None:
         meta = load_meta()
@@ -212,7 +215,7 @@ def _filename_from_title(title: str) -> str:
     return stem + ".md"
 
 
-def _write_raw(filename: str, title: str, content: str):
+def _write_raw(filename: str, title: str, content: str) -> None:
     """写入raw文件。已存在则追加（并提示可能混主题）"""
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     filepath = RAW_DIR / filename
@@ -331,7 +334,7 @@ def _chunk_text(content: str) -> list[str]:
     return chunks
 
 
-def build_vector_index():
+def build_vector_index() -> dict[str, Any] | None:
     """从wiki文章构建向量索引（Ollama本地Embedding，文件级增量）"""
     print("  🔨 构建向量索引 ...")
 
@@ -399,7 +402,7 @@ def build_vector_index():
 # 查询引擎
 # ============================================================
 
-def _flatten_chunks(index_data: dict) -> list[dict]:
+def _flatten_chunks(index_data: dict[str, Any]) -> list[dict[str, Any]]:
     return [c for f in index_data["files"].values() for c in f["chunks"]]
 
 
@@ -425,13 +428,14 @@ def query(question: str) -> str:
     if not chunks:
         return "❌ 知识库为空，请先运行 compile"
 
-    top_chunks: list[tuple[float, dict]] = []
+    top_chunks: list[tuple[float, dict[str, Any]]] = []
     try:
         q_emb = get_embed_client().embeddings(model=index_data["model"], prompt=question)["embedding"]
         # 全部chunk堆成矩阵，归一化后一次矩阵乘
         emb_matrix = np.array([c["embedding"] for c in chunks], dtype=np.float32)
         norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
-        emb_matrix = emb_matrix / np.where(norms == 0, 1.0, norms)
+        norms[norms == 0] = 1.0  # 零向量不归一化，直接跳过
+        emb_matrix = emb_matrix / norms
         q = np.array(q_emb, dtype=np.float32)
         q = q / (np.linalg.norm(q) or 1.0)
         sims = emb_matrix @ q
@@ -469,7 +473,7 @@ def query(question: str) -> str:
 # 命令实现（CLI入口见 __main__.py）
 # ============================================================
 
-def cmd_compile(force: bool = False):
+def cmd_compile(force: bool = False) -> None:
     print("🔨 编译 raw → wiki ...")
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     raw_files = list(RAW_DIR.glob("*.md"))
@@ -490,7 +494,7 @@ def cmd_compile(force: bool = False):
     build_vector_index()
 
 
-def cmd_query(question: str):
+def cmd_query(question: str) -> None:
     print(f"🔍 查询: {question}\n")
     answer = query(question)
     print(f"💡 回答:\n{answer}\n")

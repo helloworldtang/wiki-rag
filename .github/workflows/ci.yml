@@ -25,5 +25,8 @@ jobs:
       - name: Lint
         run: uvx ruff check src tests
 
+      - name: Type check
+        run: uv run mypy src/wiki_rag
+
       - name: Test
         run: uv run pytest tests/ -v

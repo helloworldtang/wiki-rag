@@ -7,7 +7,7 @@ from pathlib import Path
 from . import cmd_add_direct, cmd_add_smart, cmd_compile, cmd_query
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="wiki_rag",
         description="个人Wiki知识库RAG：add收集素材 → compile编译+索引 → query问答",
