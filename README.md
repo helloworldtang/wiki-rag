@@ -79,8 +79,9 @@ uv run python -m wiki_rag compile                  # 重新编译（增量，只
 | `WIKI_EMBED_MODEL` | `nomic-embed-text:latest` | Embedding 模型（Ollama） |
 | `WIKI_USE_LOCAL_LLM` | （关） | 设为 `1` 时 LLM 走本地 Ollama |
 | `WIKI_LOCAL_MODEL` | `deepseek-r1:1.5b` | 本地 LLM 模型名 |
+| `WIKI_RAG_HOME` | 仓库根目录 | 数据目录（`raw/`、`wiki/`、`storage/`）的父目录 |
 
-均可写入 `.env`（已 gitignore，不会误提交密钥）。
+除 `WIKI_RAG_HOME` 外均可写入 `.env`（已 gitignore，不会误提交密钥）；`WIKI_RAG_HOME` 须为真实环境变量——定位 `.env` 本身就依赖它，pip 安装到 site-packages 后用它指定数据目录即可。
 
 ## 技术栈
 

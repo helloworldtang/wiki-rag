@@ -1,14 +1,8 @@
 """Wiki RAG 系统测试"""
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# 项目根目录
-BASE_DIR = Path(__file__).parent.parent
-RAW_DIR = BASE_DIR / "raw"
-WIKI_DIR = BASE_DIR / "wiki"
-STORAGE_DIR = BASE_DIR / "storage"
-META_FILE = STORAGE_DIR / "meta.json"
+from wiki_rag import RAW_DIR
 
 
 class TestFileHash:
@@ -190,7 +184,7 @@ class TestQuery:
 
     def test_query_with_empty_index(self, tmp_path, monkeypatch):
         from wiki_rag import query
-        monkeypatch.setattr("wiki_rag.STORAGE_DIR", tmp_path / "nonexistent")
+        monkeypatch.setattr("wiki_rag.VECTOR_INDEX_FILE", tmp_path / "nonexistent" / "vector_index.json")
         result = query("test question")
         assert "知识库为空" in result
 
@@ -261,7 +255,7 @@ class TestKeywordFallback:
              "metadata": {"filename": "a.md", "title": "A", "chunk": 0}},
         ]}}}
         (storage / "vector_index.json").write_text(json.dumps(index_data, ensure_ascii=False))
-        monkeypatch.setattr(mod, "STORAGE_DIR", storage)
+        monkeypatch.setattr(mod, "VECTOR_INDEX_FILE", storage / "vector_index.json")
 
         def boom():
             raise RuntimeError("ollama down")
@@ -285,6 +279,7 @@ class TestIncrementalIndex:
         storage = tmp_path / "storage"
         storage.mkdir()
         monkeypatch.setattr(mod, "STORAGE_DIR", storage)
+        monkeypatch.setattr(mod, "VECTOR_INDEX_FILE", storage / "vector_index.json")
 
         calls = []
 

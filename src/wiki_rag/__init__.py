@@ -30,13 +30,15 @@ import numpy as np
 # 配置
 # ============================================================
 
+# WIKI_RAG_HOME环境变量优先（支持pip安装后指定数据目录）；缺省时
 # src/wiki_rag/__init__.py 向上两级 = 仓库根目录
-BASE_DIR = Path(__file__).resolve().parents[2]
+BASE_DIR = Path(os.environ.get("WIKI_RAG_HOME", Path(__file__).resolve().parents[2])).resolve()
 RAW_DIR = BASE_DIR / "raw"
 WIKI_DIR = BASE_DIR / "wiki"
-INDEX_FILE = BASE_DIR / "wiki" / "index.md"
+INDEX_FILE = WIKI_DIR / "index.md"
 STORAGE_DIR = BASE_DIR / "storage"
-META_FILE = BASE_DIR / "storage" / "meta.json"
+META_FILE = STORAGE_DIR / "meta.json"
+VECTOR_INDEX_FILE = STORAGE_DIR / "vector_index.json"
 
 
 def _load_dotenv(path: Path) -> None:
@@ -345,7 +347,7 @@ def build_vector_index() -> dict[str, Any] | None:
         print("  ⚠️  没有wiki文章，跳过索引构建")
         return None
 
-    index_file = STORAGE_DIR / "vector_index.json"
+    index_file = VECTOR_INDEX_FILE
     old_files = {}
     if index_file.exists():
         try:
@@ -419,7 +421,7 @@ def _extract_bigrams(text: str) -> set[str]:
 
 def query(question: str) -> str:
     """查询Wiki知识库：向量检索（失败降级关键词bigram匹配）→ LLM回答"""
-    index_file = STORAGE_DIR / "vector_index.json"
+    index_file = VECTOR_INDEX_FILE
     if not index_file.exists():
         return "❌ 知识库为空，请先运行 compile"
 
