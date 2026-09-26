@@ -32,7 +32,7 @@ import numpy as np
 
 # WIKI_RAG_HOME环境变量优先（支持pip安装后指定数据目录）；缺省时
 # src/wiki_rag/__init__.py 向上两级 = 仓库根目录
-BASE_DIR = Path(os.environ.get("WIKI_RAG_HOME", Path(__file__).resolve().parents[2])).resolve()
+BASE_DIR = Path(os.environ.get("WIKI_RAG_HOME") or Path(__file__).resolve().parents[2]).resolve()
 RAW_DIR = BASE_DIR / "raw"
 WIKI_DIR = BASE_DIR / "wiki"
 INDEX_FILE = WIKI_DIR / "index.md"
