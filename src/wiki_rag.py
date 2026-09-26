@@ -1,5 +1,5 @@
 """
-Wiki RAG 系统 - Karpathy范式的LlamaIndex实现
+Wiki RAG 系统 - Karpathy范式的个人知识库RAG（DeepSeek + Ollama本地Embedding）
 
 架构设计（三层）：
 1. raw/    — 原始知识素材（Markdown笔记）
@@ -18,11 +18,12 @@ Wiki RAG 系统 - Karpathy范式的LlamaIndex实现
 - 可通过环境变量切换模型
 """
 
-import os
-import json
 import hashlib
+import json
+import os
+import re
 from pathlib import Path
-from typing import Optional
+
 import numpy as np
 
 # ============================================================
@@ -44,6 +45,7 @@ EMBED_MODEL = os.getenv("WIKI_EMBED_MODEL", "nomic-embed-text:latest")
 USE_LOCAL_LLM = os.getenv("WIKI_USE_LOCAL_LLM", "").lower() in ("1", "true", "yes")
 
 CHUNK_SIZE = 512
+TOP_K = 5
 
 
 def get_llm_client():
@@ -51,10 +53,10 @@ def get_llm_client():
     if USE_LOCAL_LLM:
         import ollama
         return {"type": "ollama", "client": ollama.Client(), "model": os.getenv("WIKI_LOCAL_MODEL", "deepseek-r1:1.5b")}
-    
+
     if not DEEPSEEK_API_KEY:
         raise ValueError("DEEPSEEK_API_KEY 未设置。请设置环境变量或设置 WIKI_USE_LOCAL_LLM=1 使用本地模型")
-    
+
     from openai import OpenAI
     client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
     return {"type": "openai", "client": client, "model": LLM_MODEL}
@@ -128,16 +130,16 @@ def save_meta(meta: dict):
     META_FILE.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
 
-def compile_raw_to_wiki(raw_file: Path, force: bool = False) -> Optional[Path]:
-    meta = load_meta()
+def compile_raw_to_wiki(raw_file: Path, force: bool = False, meta: dict | None = None) -> Path | None:
+    if meta is None:
+        meta = load_meta()
     filename = raw_file.name
     current_hash = file_hash(raw_file)
 
-    if not force and filename in meta["compiled"]:
-        if meta["compiled"][filename]["hash"] == current_hash:
-            wiki_path = WIKI_DIR / meta["compiled"][filename]["wiki_file"]
-            if wiki_path.exists():
-                return None
+    if not force and filename in meta["compiled"] and meta["compiled"][filename]["hash"] == current_hash:
+        wiki_path = WIKI_DIR / meta["compiled"][filename]["wiki_file"]
+        if wiki_path.exists():
+            return None
 
     print(f"  📝 编译: {filename} ...")
 
@@ -186,51 +188,56 @@ SPLIT_PROMPT = """你是一个知识分类专家。用户会给你一段文本�
 def cmd_add_smart(text: str):
     """智能添加：LLM自动拆分多主题，生成多个raw文件"""
     print("🧠 分析文本，识别主题 ...")
-    
+
     response = llm_chat(SPLIT_PROMPT.format(text=text))
-    
+
     # 解析JSON（兼容LLM输出可能带的markdown代码块）
     response = response.strip()
     if response.startswith("```"):
         response = response.split("\n", 1)[1] if "\n" in response else response[3:]
-    if response.endswith("```"):
-        response = response[:-3]
+    response = response.removesuffix("```")
     response = response.strip()
-    
+
     try:
         topics = json.loads(response)
     except json.JSONDecodeError:
-        # JSON解析失败，作为单主题处理
+        print("  ⚠️  主题拆分失败（LLM输出无法解析为JSON），整段作为单文件保存")
         topics = [{"title": "未分类知识", "content": text}]
-    
+
     if not isinstance(topics, list):
         topics = [topics]
-    
+
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     created = []
-    
+
     for topic in topics:
-        title = topic.get("title", "未分类")
+        title = (topic.get("title") or "").strip()
         content = topic.get("content", "")
-        
-        # 生成文件名
-        filename = title.lower().replace(" ", "-").replace("/", "-")
-        # 去掉特殊字符
-        filename = "".join(c for c in filename if c.isalnum() or c in "-_") + ".md"
+
+        # 空标题兜底：用内容hash命名，避免生成空名文件或互相覆盖
+        if not title:
+            title = f"未命名-{hashlib.md5(content.encode('utf-8')).hexdigest()[:6]}"
+
+        # 生成文件名（去掉特殊字符；中文标题保留汉字）
+        stem = title.lower().replace(" ", "-").replace("/", "-")
+        stem = "".join(c for c in stem if c.isalnum() or c in "-_")
+        if not stem:
+            stem = hashlib.md5(title.encode("utf-8")).hexdigest()[:8]
+        filename = stem + ".md"
         filepath = RAW_DIR / filename
-        
+
         # 如果文件已存在，追加内容
         if filepath.exists():
             existing = filepath.read_text(encoding="utf-8")
             filepath.write_text(existing + "\n\n---\n\n" + content, encoding="utf-8")
-            print(f"  📎 追加到: {filename}")
+            print(f"  📎 追加到: {filename}（文件已存在，两个主题将混在同一文件，建议检查）")
         else:
             filepath.write_text(f"# {title}\n\n{content}", encoding="utf-8")
             print(f"  ✅ 新建: {filename}")
         created.append(filename)
-    
+
     print(f"\n📊 识别 {len(topics)} 个主题: {', '.join(t.get('title', '?') for t in topics)}")
-    print(f"💡 运行 `uv run python -m src.wiki_rag compile` 编译新条目")
+    print("💡 运行 `uv run python -m src.wiki_rag compile` 编译新条目")
     return created
 
 
@@ -251,13 +258,13 @@ def build_wiki_index() -> Path:
             continue
         title = wf.stem.replace("-", " ").replace("_", " ").title()
         first_line = ""
-        with open(wf, "r", encoding="utf-8") as f:
+        with open(wf, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
                     first_line = line[:80]
                     break
-        lines.append(f"- **{title}** — {first_line}  ")
+        lines.append(f"- **{title}** — {first_line or '(无描述)'}  ")
         lines.append(f"  `wiki/{wf.name}`\n")
 
     INDEX_FILE.write_text("\n".join(lines), encoding="utf-8")
@@ -265,47 +272,95 @@ def build_wiki_index() -> Path:
     return INDEX_FILE
 
 
+def _split_sentences(text: str) -> list[str]:
+    return [s for s in re.split(r"(?<=[。！？!?\.])\s*", text) if s.strip()]
+
+
+def _chunk_text(content: str) -> list[str]:
+    """切分检索chunk：按段落，超过CHUNK_SIZE的段落按句子贪心打包"""
+    chunks = []
+    for para in (p.strip() for p in content.split("\n\n")):
+        if len(para) < 20:
+            continue
+        if len(para) <= CHUNK_SIZE:
+            chunks.append(para)
+            continue
+        buf = ""
+        for sent in _split_sentences(para):
+            while len(sent) > CHUNK_SIZE:  # 单句超长，硬切
+                chunks.append(sent[:CHUNK_SIZE])
+                sent = sent[CHUNK_SIZE:]
+            if buf and len(buf) + len(sent) + 1 > CHUNK_SIZE:
+                chunks.append(buf)
+                buf = sent
+            else:
+                buf = f"{buf} {sent}".strip()
+        if buf.strip():
+            chunks.append(buf.strip())
+    return chunks
+
+
 def build_vector_index():
-    """从wiki文章构建向量索引（使用Ollama本地Embedding）"""
+    """从wiki文章构建向量索引（Ollama本地Embedding，文件级增量）"""
     print("  🔨 构建向量索引 ...")
 
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     wiki_files = [f for f in WIKI_DIR.glob("*.md") if f.name != "index.md"]
-    
+
     if not wiki_files:
         print("  ⚠️  没有wiki文章，跳过索引构建")
         return None
 
+    index_file = STORAGE_DIR / "vector_index.json"
+    old_files = {}
+    if index_file.exists():
+        try:
+            old = json.loads(index_file.read_text(encoding="utf-8"))
+            if old.get("model") == EMBED_MODEL:
+                old_files = old.get("files", {})
+        except (json.JSONDecodeError, KeyError):
+            pass  # 旧索引损坏，全量重建
+
     client = get_embed_client()
-    chunks = []
+    files = {}
+    reused, embedded = 0, 0
 
     for wf in wiki_files:
-        content = wf.read_text(encoding="utf-8")
-        title = wf.stem.replace("-", " ").replace("_", " ").title()
-        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
-        
-        for i, para in enumerate(paragraphs):
-            if len(para) < 20:
-                continue
-            try:
-                resp = client.embeddings(model=EMBED_MODEL, prompt=para)
-                chunks.append({
-                    "text": para,
-                    "metadata": {"filename": wf.name, "title": title, "chunk": i},
-                    "embedding": resp["embedding"],
-                })
-            except Exception as e:
-                print(f"  ⚠️  embedding失败 {wf.name} chunk {i}: {e}")
+        h = file_hash(wf)
+        cached = old_files.get(wf.name)
+        if cached and cached.get("hash") == h:
+            files[wf.name] = cached
+            reused += 1
+            continue
 
-    if not chunks:
+        title = wf.stem.replace("-", " ").replace("_", " ").title()
+        texts = _chunk_text(wf.read_text(encoding="utf-8"))
+        if not texts:
+            continue
+        try:
+            # 批量嵌入：一个文件一次调用
+            embeddings = client.embed(model=EMBED_MODEL, input=texts)["embeddings"]
+        except Exception as e:
+            print(f"  ⚠️  embedding失败 {wf.name}: {e}")
+            continue
+
+        files[wf.name] = {
+            "hash": h,
+            "chunks": [
+                {"text": t, "embedding": emb, "metadata": {"filename": wf.name, "title": title, "chunk": i}}
+                for i, (t, emb) in enumerate(zip(texts, embeddings, strict=True))
+            ],
+        }
+        embedded += 1
+
+    if not files:
         print("  ⚠️  没有有效的embedding")
         return None
 
-    index_data = {"model": EMBED_MODEL, "dim": len(chunks[0]["embedding"]), "chunks": chunks}
-    (STORAGE_DIR / "vector_index.json").write_text(
-        json.dumps(index_data, ensure_ascii=False), encoding="utf-8"
-    )
-    print(f"  ✅ 向量索引构建完成: {len(chunks)} 个chunk, {len(wiki_files)} 篇文章")
+    dim = len(next(iter(files.values()))["chunks"][0]["embedding"])
+    index_data = {"model": EMBED_MODEL, "dim": dim, "files": files}
+    index_file.write_text(json.dumps(index_data, ensure_ascii=False), encoding="utf-8")
+    print(f"  ✅ 向量索引构建完成: {len(files)} 篇文章（新嵌入{embedded}, 复用{reused}）")
     return index_data
 
 
@@ -313,58 +368,59 @@ def build_vector_index():
 # 查询引擎
 # ============================================================
 
-def _cosine_similarity(a, b):
-    a, b = np.array(a), np.array(b)
-    norm = np.linalg.norm(a) * np.linalg.norm(b)
-    return np.dot(a, b) / norm if norm > 0 else 0
+def _flatten_chunks(index_data: dict) -> list[dict]:
+    return [c for f in index_data["files"].values() for c in f["chunks"]]
+
+
+def _extract_bigrams(text: str) -> set[str]:
+    """提取字符二元组。中文没有空格分词，bigram是最轻量的匹配方案"""
+    grams = set()
+    for run in re.findall(r"[0-9a-z一-鿿]+", text.lower()):
+        if len(run) == 1:
+            grams.add(run)
+        else:
+            grams.update(run[i:i + 2] for i in range(len(run) - 1))
+    return grams
 
 
 def query(question: str) -> str:
-    """查询Wiki知识库：关键词匹配/向量检索 → LLM回答（使用DeepSeek）"""
+    """查询Wiki知识库：向量检索（失败降级关键词bigram匹配）→ LLM回答"""
     index_file = STORAGE_DIR / "vector_index.json"
     if not index_file.exists():
         return "❌ 知识库为空，请先运行 compile"
 
     index_data = json.loads(index_file.read_text(encoding="utf-8"))
-    
-    # 尝试向量检索，失败则用关键词匹配
-    top_chunks = []
+    chunks = _flatten_chunks(index_data)
+    if not chunks:
+        return "❌ 知识库为空，请先运行 compile"
+
+    top_chunks: list[tuple[float, dict]] = []
     try:
-        embed_client = get_embed_client()
-        q_emb = embed_client.embeddings(model=index_data["model"], prompt=question)["embedding"]
-        scored = [(sim, c) for c in index_data["chunks"] if (sim := _cosine_similarity(q_emb, c["embedding"])) is not None]
-        scored.sort(key=lambda x: x[0], reverse=True)
-        top_chunks = scored[:5]
+        q_emb = get_embed_client().embeddings(model=index_data["model"], prompt=question)["embedding"]
+        # 全部chunk堆成矩阵，归一化后一次矩阵乘
+        emb_matrix = np.array([c["embedding"] for c in chunks], dtype=np.float32)
+        norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
+        emb_matrix = emb_matrix / np.where(norms == 0, 1.0, norms)
+        q = np.array(q_emb, dtype=np.float32)
+        q = q / (np.linalg.norm(q) or 1.0)
+        sims = emb_matrix @ q
+        top_chunks = [(float(sims[i]), chunks[i]) for i in np.argsort(-sims)[:TOP_K]]
     except Exception as e:
         print(f"  ⚠️  向量检索失败({e})，使用关键词匹配")
-        # 关键词匹配 fallback：搜索子串匹配
-        scored_kw = []
-        # 提取问题中的关键词（去掉常见停用词）
-        stopwords = {"的", "是", "了", "在", "有", "和", "与", "或", "不", "也", "都", "吗", "什么", "怎么", "如何", "为什么", "哪", "哪些", "可以", "能", "会", "请", "问"}
-        q_keywords = [w for w in question.replace("？", "").replace("?", "").split() if w not in stopwords and len(w) > 1]
-        # 如果分词后为空，直接用原始问题搜索
-        if not q_keywords:
-            q_keywords = [question]
-        for chunk in index_data["chunks"]:
-            text_lower = chunk["text"].lower()
-            hits = sum(1 for kw in q_keywords if kw.lower() in text_lower)
+        q_grams = _extract_bigrams(question)
+        scored = []
+        for chunk in chunks:
+            hits = len(q_grams & _extract_bigrams(chunk["text"]))
             if hits > 0:
-                scored_kw.append((hits, chunk))
-        scored_kw.sort(key=lambda x: x[0], reverse=True)
-        top_chunks = [(0, c) for _, c in scored_kw[:5]]
+                scored.append((hits, chunk))
+        if not scored:
+            return "❓ 知识库中没有找到与问题相关的内容"
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top_chunks = [(float(s), c) for s, c in scored[:TOP_K]]
 
-    if not top_chunks:
-        # 没有匹配到chunk，直接传所有wiki内容给LLM
-        print("  ℹ️  无精确匹配，使用全量上下文")
-        all_wiki = []
-        for wf in sorted(WIKI_DIR.glob("*.md")):
-            if wf.name == "index.md": continue
-            all_wiki.append(f"[{wf.stem}]\n{wf.read_text(encoding='utf-8')}")
-        context = "\n\n".join(all_wiki) if all_wiki else "(空)"
-    else:
-        context = "\n\n".join(
-            f"[{c['metadata']['title']}]\n{c['text']}" for _, c in top_chunks
-        )
+    context = "\n\n".join(
+        f"[{c['metadata']['title']}]\n{c['text']}" for _, c in top_chunks
+    )
 
     prompt = f"""基于以下知识库内容回答问题。如果知识库中没有相关信息，请直接说明。
 
@@ -392,8 +448,9 @@ def cmd_compile(force: bool = False):
         return
 
     compiled_count = 0
+    meta = load_meta()
     for rf in raw_files:
-        result = compile_raw_to_wiki(rf, force=force)
+        result = compile_raw_to_wiki(rf, force=force, meta=meta)
         if result is not None:
             compiled_count += 1
 
@@ -411,13 +468,13 @@ def cmd_query(question: str):
 def cmd_add(args: list[str]):
     """添加知识。支持：文件路径、直接文本、管道输入"""
     RAW_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     if not args:
         print("用法:")
         print("  add <文件路径>         从文件添加")
         print("  add --text <内容>      直接添加文本（自动拆分多主题）")
         return
-    
+
     if args[0] == "--text":
         # 直接文本模式：智能拆分多主题
         text = " ".join(args[1:]) if len(args) > 1 else ""
