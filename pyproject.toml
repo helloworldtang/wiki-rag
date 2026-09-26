@@ -1,6 +1,6 @@
 [project]
 name = "wiki-rag"
-version = "0.1.0"
+version = "0.2.0"
 description = "个人Wiki知识库RAG - LLM编译Wiki + 本地向量检索"
 readme = "README.md"
 requires-python = ">=3.10"
