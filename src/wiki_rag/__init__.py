@@ -7,15 +7,14 @@ Wiki RAG 系统 - Karpathy范式的个人知识库RAG（DeepSeek + Ollama本地E
 3. index.md — 全局索引，所有Wiki文章的目录
 
 核心流程：
-- compile: raw → wiki（LLM摘要+结构化）
-- build_index: wiki → index.md（生成全局索引）
-- query: 用户提问 → RAG检索wiki → LLM回答
-- add: 新增raw素材 → 自动拆分多主题 → compile → 更新索引
+- add: 新增raw素材（可选LLM自动拆分多主题）
+- compile: raw → wiki（LLM摘要+结构化）+ 构建索引
+- query: 用户提问 → 向量检索wiki → LLM回答
 
 模型策略：
 - 默认使用DeepSeek API（线上模型，回答质量高）
 - Embedding使用Ollama本地模型（nomic-embed-text）
-- 可通过环境变量切换模型
+- 可通过环境变量或 .env 文件切换模型（见 .env.example）
 """
 
 import hashlib
@@ -30,12 +29,28 @@ import numpy as np
 # 配置
 # ============================================================
 
-BASE_DIR = Path(__file__).parent.parent
+# src/wiki_rag/__init__.py 向上两级 = 仓库根目录
+BASE_DIR = Path(__file__).resolve().parents[2]
 RAW_DIR = BASE_DIR / "raw"
 WIKI_DIR = BASE_DIR / "wiki"
 INDEX_FILE = BASE_DIR / "wiki" / "index.md"
 STORAGE_DIR = BASE_DIR / "storage"
 META_FILE = BASE_DIR / "storage" / "meta.json"
+
+
+def _load_dotenv(path: Path) -> None:
+    """极简.env加载（不引入依赖）：只支持 KEY=VALUE 和 # 注释，已存在的环境变量不覆盖"""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+_load_dotenv(BASE_DIR / ".env")
 
 # 模型配置
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
@@ -55,7 +70,10 @@ def get_llm_client():
         return {"type": "ollama", "client": ollama.Client(), "model": os.getenv("WIKI_LOCAL_MODEL", "deepseek-r1:1.5b")}
 
     if not DEEPSEEK_API_KEY:
-        raise ValueError("DEEPSEEK_API_KEY 未设置。请设置环境变量或设置 WIKI_USE_LOCAL_LLM=1 使用本地模型")
+        raise ValueError(
+            "DEEPSEEK_API_KEY 未设置。请在 .env 中配置或设置环境变量，"
+            "或设置 WIKI_USE_LOCAL_LLM=1 使用本地模型"
+        )
 
     from openai import OpenAI
     client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
@@ -131,6 +149,7 @@ def save_meta(meta: dict):
 
 
 def compile_raw_to_wiki(raw_file: Path, force: bool = False, meta: dict | None = None) -> Path | None:
+    """编译单个raw文件。未变化（hash一致且wiki存在）返回None，否则返回wiki文件路径"""
     if meta is None:
         meta = load_meta()
     filename = raw_file.name
@@ -146,8 +165,7 @@ def compile_raw_to_wiki(raw_file: Path, force: bool = False, meta: dict | None =
     content = raw_file.read_text(encoding="utf-8")
     wiki_content = llm_chat(COMPILE_PROMPT.format(content=content))
 
-    stem = raw_file.stem
-    wiki_file = f"{stem}.md"
+    wiki_file = f"{raw_file.stem}.md"
     wiki_path = WIKI_DIR / wiki_file
 
     WIKI_DIR.mkdir(parents=True, exist_ok=True)
@@ -161,7 +179,7 @@ def compile_raw_to_wiki(raw_file: Path, force: bool = False, meta: dict | None =
 
 
 # ============================================================
-# 智能添加：支持多主题自动拆分
+# 添加知识：多主题自动拆分 / 原样直存
 # ============================================================
 
 SPLIT_PROMPT = """你是一个知识分类专家。用户会给你一段文本（可能是Markdown格式的长文）。
@@ -185,7 +203,29 @@ SPLIT_PROMPT = """你是一个知识分类专家。用户会给你一段文本�
 ---"""
 
 
-def cmd_add_smart(text: str):
+def _filename_from_title(title: str) -> str:
+    """标题 → 安全文件名（保留中文/字母/数字/-_，空标题用hash兜底）"""
+    stem = title.lower().replace(" ", "-").replace("/", "-")
+    stem = "".join(c for c in stem if c.isalnum() or c in "-_")
+    if not stem:
+        stem = hashlib.md5(title.encode("utf-8")).hexdigest()[:8]
+    return stem + ".md"
+
+
+def _write_raw(filename: str, title: str, content: str):
+    """写入raw文件。已存在则追加（并提示可能混主题）"""
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    filepath = RAW_DIR / filename
+    if filepath.exists():
+        existing = filepath.read_text(encoding="utf-8")
+        filepath.write_text(existing + "\n\n---\n\n" + content, encoding="utf-8")
+        print(f"  📎 追加到: {filename}（文件已存在，两个主题将混在同一文件，建议检查）")
+    else:
+        filepath.write_text(f"# {title}\n\n{content}", encoding="utf-8")
+        print(f"  ✅ 新建: {filename}")
+
+
+def cmd_add_smart(text: str) -> list[str]:
     """智能添加：LLM自动拆分多主题，生成多个raw文件"""
     print("🧠 分析文本，识别主题 ...")
 
@@ -207,38 +247,30 @@ def cmd_add_smart(text: str):
     if not isinstance(topics, list):
         topics = [topics]
 
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
     created = []
-
     for topic in topics:
         title = (topic.get("title") or "").strip()
         content = topic.get("content", "")
-
         # 空标题兜底：用内容hash命名，避免生成空名文件或互相覆盖
         if not title:
             title = f"未命名-{hashlib.md5(content.encode('utf-8')).hexdigest()[:6]}"
-
-        # 生成文件名（去掉特殊字符；中文标题保留汉字）
-        stem = title.lower().replace(" ", "-").replace("/", "-")
-        stem = "".join(c for c in stem if c.isalnum() or c in "-_")
-        if not stem:
-            stem = hashlib.md5(title.encode("utf-8")).hexdigest()[:8]
-        filename = stem + ".md"
-        filepath = RAW_DIR / filename
-
-        # 如果文件已存在，追加内容
-        if filepath.exists():
-            existing = filepath.read_text(encoding="utf-8")
-            filepath.write_text(existing + "\n\n---\n\n" + content, encoding="utf-8")
-            print(f"  📎 追加到: {filename}（文件已存在，两个主题将混在同一文件，建议检查）")
-        else:
-            filepath.write_text(f"# {title}\n\n{content}", encoding="utf-8")
-            print(f"  ✅ 新建: {filename}")
+        filename = _filename_from_title(title)
+        _write_raw(filename, title, content)
         created.append(filename)
 
     print(f"\n📊 识别 {len(topics)} 个主题: {', '.join(t.get('title', '?') for t in topics)}")
-    print("💡 运行 `uv run python -m src.wiki_rag compile` 编译新条目")
+    print("💡 运行 `python -m wiki_rag compile` 编译新条目")
     return created
+
+
+def cmd_add_direct(text: str) -> str:
+    """原样添加：不经过LLM拆分，整篇存为一个raw文件（文件名取首个一级标题）"""
+    m = re.search(r"^#\s+(.+)$", text, flags=re.MULTILINE)
+    title = (m.group(1).strip() if m else "") or f"未命名-{hashlib.md5(text.encode('utf-8')).hexdigest()[:6]}"
+    filename = _filename_from_title(title)
+    _write_raw(filename, title, text.strip())
+    print("💡 运行 `python -m wiki_rag compile` 编译新条目")
+    return filename
 
 
 # ============================================================
@@ -247,15 +279,14 @@ def cmd_add_smart(text: str):
 
 def build_wiki_index() -> Path:
     WIKI_DIR.mkdir(parents=True, exist_ok=True)
-    wiki_files = sorted(WIKI_DIR.glob("*.md"))
+    # index.md是本函数自己生成的目录页，不计入文章数
+    wiki_files = sorted(f for f in WIKI_DIR.glob("*.md") if f.name != "index.md")
 
     lines = ["# 📚 个人Wiki知识库索引\n"]
     lines.append(f"> 共 {len(wiki_files)} 篇文章 | 自动生成\n")
     lines.append("## 文章目录\n")
 
     for wf in wiki_files:
-        if wf.name == "index.md":
-            continue
         title = wf.stem.replace("-", " ").replace("_", " ").title()
         first_line = ""
         with open(wf, encoding="utf-8") as f:
@@ -268,7 +299,7 @@ def build_wiki_index() -> Path:
         lines.append(f"  `wiki/{wf.name}`\n")
 
     INDEX_FILE.write_text("\n".join(lines), encoding="utf-8")
-    print(f"  📑 索引已更新: {len(wiki_files)-1} 篇文章")
+    print(f"  📑 索引已更新: {len(wiki_files)} 篇文章")
     return INDEX_FILE
 
 
@@ -435,7 +466,7 @@ def query(question: str) -> str:
 
 
 # ============================================================
-# CLI 入口
+# 命令实现（CLI入口见 __main__.py）
 # ============================================================
 
 def cmd_compile(force: bool = False):
@@ -463,59 +494,3 @@ def cmd_query(question: str):
     print(f"🔍 查询: {question}\n")
     answer = query(question)
     print(f"💡 回答:\n{answer}\n")
-
-
-def cmd_add(args: list[str]):
-    """添加知识。支持：文件路径、直接文本、管道输入"""
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-
-    if not args:
-        print("用法:")
-        print("  add <文件路径>         从文件添加")
-        print("  add --text <内容>      直接添加文本（自动拆分多主题）")
-        return
-
-    if args[0] == "--text":
-        # 直接文本模式：智能拆分多主题
-        text = " ".join(args[1:]) if len(args) > 1 else ""
-        if not text:
-            # 尝试从stdin读取
-            import sys
-            if not sys.stdin.isatty():
-                text = sys.stdin.read()
-        if not text:
-            print("请输入内容")
-            return
-        cmd_add_smart(text)
-    else:
-        # 文件模式
-        filepath = Path(args[0])
-        if not filepath.exists():
-            print(f"文件不存在: {filepath}")
-            return
-        content = filepath.read_text(encoding="utf-8")
-        cmd_add_smart(content)
-
-
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("用法: python -m src.wiki_rag [compile|query|add] [args]")
-        print("  compile [--force]     编译raw → wiki")
-        print("  query <question>      查询知识库")
-        print("  add <文件路径>         从文件添加（自动拆分多主题）")
-        print("  add --text <内容>     直接添加文本（自动拆分多主题）")
-        sys.exit(1)
-
-    cmd = sys.argv[1]
-    if cmd == "compile":
-        cmd_compile(force="--force" in sys.argv)
-    elif cmd == "query":
-        if len(sys.argv) < 3:
-            print("请输入查询内容")
-            sys.exit(1)
-        cmd_query(" ".join(sys.argv[2:]))
-    elif cmd == "add":
-        cmd_add(sys.argv[2:])
-    else:
-        print(f"未知命令: {cmd}")

@@ -684,7 +684,7 @@ dependencies = [
     { name = "openai" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "pytest" },
 ]
@@ -694,6 +694,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "ollama", specifier = ">=0.3" },
     { name = "openai", specifier = ">=2.31.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0.0" }]

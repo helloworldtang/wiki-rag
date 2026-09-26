@@ -15,7 +15,7 @@ class TestFileHash:
     """文件哈希计算"""
 
     def test_hash_consistency(self, tmp_path):
-        from src.wiki_rag import file_hash
+        from wiki_rag import file_hash
         f = tmp_path / "test.md"
         f.write_text("hello world")
         h1 = file_hash(f)
@@ -24,7 +24,7 @@ class TestFileHash:
         assert len(h1) == 32  # MD5 hex长度
 
     def test_hash_changes_with_content(self, tmp_path):
-        from src.wiki_rag import file_hash
+        from wiki_rag import file_hash
         f = tmp_path / "test.md"
         f.write_text("hello")
         h1 = file_hash(f)
@@ -37,15 +37,15 @@ class TestMetaData:
     """元数据管理"""
 
     def test_load_empty_meta(self, tmp_path, monkeypatch):
-        from src.wiki_rag import load_meta
-        monkeypatch.setattr("src.wiki_rag.META_FILE", tmp_path / "meta.json")
+        from wiki_rag import load_meta
+        monkeypatch.setattr("wiki_rag.META_FILE", tmp_path / "meta.json")
         meta = load_meta()
         assert "compiled" in meta
         assert meta["compiled"] == {}
 
     def test_save_and_load_meta(self, tmp_path, monkeypatch):
-        from src.wiki_rag import load_meta, save_meta
-        monkeypatch.setattr("src.wiki_rag.META_FILE", tmp_path / "meta.json")
+        from wiki_rag import load_meta, save_meta
+        monkeypatch.setattr("wiki_rag.META_FILE", tmp_path / "meta.json")
         meta = {"compiled": {"test.md": {"hash": "abc123", "wiki_file": "test.md"}}}
         save_meta(meta)
         loaded = load_meta()
@@ -56,7 +56,7 @@ class TestCompile:
     """编译逻辑"""
 
     def test_compile_skips_unchanged_file(self, tmp_path, monkeypatch):
-        from src.wiki_rag import compile_raw_to_wiki
+        from wiki_rag import compile_raw_to_wiki
 
         # 准备
         raw_file = tmp_path / "raw" / "test.md"
@@ -67,7 +67,7 @@ class TestCompile:
         wiki_dir.mkdir()
 
         # 模拟已编译
-        from src.wiki_rag import file_hash
+        from wiki_rag import file_hash
         meta_file = tmp_path / "meta.json"
         meta = {"compiled": {"test.md": {"hash": file_hash(raw_file), "wiki_file": "test.md"}}}
         meta_file.write_text(json.dumps(meta))
@@ -75,16 +75,16 @@ class TestCompile:
         # 创建已存在的wiki文件
         (wiki_dir / "test.md").write_text("compiled content")
 
-        monkeypatch.setattr("src.wiki_rag.META_FILE", meta_file)
-        monkeypatch.setattr("src.wiki_rag.WIKI_DIR", wiki_dir)
+        monkeypatch.setattr("wiki_rag.META_FILE", meta_file)
+        monkeypatch.setattr("wiki_rag.WIKI_DIR", wiki_dir)
 
         result = compile_raw_to_wiki(raw_file)
         assert result is None  # 跳过
 
     def test_compile_calls_llm_for_new_file(self, tmp_path, monkeypatch):
-        from src.wiki_rag import compile_raw_to_wiki
+        from wiki_rag import compile_raw_to_wiki
         monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-        monkeypatch.setattr("src.wiki_rag.DEEPSEEK_API_KEY", "test-key")
+        monkeypatch.setattr("wiki_rag.DEEPSEEK_API_KEY", "test-key")
 
         raw_file = tmp_path / "raw" / "new-topic.md"
         raw_file.parent.mkdir()
@@ -96,8 +96,8 @@ class TestCompile:
         meta_file = tmp_path / "meta.json"
         meta_file.write_text('{"compiled": {}}')
 
-        monkeypatch.setattr("src.wiki_rag.META_FILE", meta_file)
-        monkeypatch.setattr("src.wiki_rag.WIKI_DIR", wiki_dir)
+        monkeypatch.setattr("wiki_rag.META_FILE", meta_file)
+        monkeypatch.setattr("wiki_rag.WIKI_DIR", wiki_dir)
 
         mock_resp = MagicMock()
         mock_resp.choices = [MagicMock(message=MagicMock(content="# New Topic\nCompiled content\n\n## 总结\nDone"))]
@@ -114,9 +114,9 @@ class TestCompile:
         assert "Compiled content" in (wiki_dir / "new-topic.md").read_text()
 
     def test_compile_force_recompiles(self, tmp_path, monkeypatch):
-        from src.wiki_rag import compile_raw_to_wiki, file_hash
+        from wiki_rag import compile_raw_to_wiki, file_hash
         monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-        monkeypatch.setattr("src.wiki_rag.DEEPSEEK_API_KEY", "test-key")
+        monkeypatch.setattr("wiki_rag.DEEPSEEK_API_KEY", "test-key")
 
         raw_file = tmp_path / "raw" / "test.md"
         raw_file.parent.mkdir()
@@ -130,8 +130,8 @@ class TestCompile:
         meta = {"compiled": {"test.md": {"hash": file_hash(raw_file), "wiki_file": "test.md"}}}
         meta_file.write_text(json.dumps(meta))
 
-        monkeypatch.setattr("src.wiki_rag.META_FILE", meta_file)
-        monkeypatch.setattr("src.wiki_rag.WIKI_DIR", wiki_dir)
+        monkeypatch.setattr("wiki_rag.META_FILE", meta_file)
+        monkeypatch.setattr("wiki_rag.WIKI_DIR", wiki_dir)
 
         mock_resp = MagicMock()
         mock_resp.choices = [MagicMock(message=MagicMock(content="# Test\nNew compiled content"))]
@@ -150,7 +150,7 @@ class TestBuildIndex:
     """索引构建"""
 
     def test_build_wiki_index(self, tmp_path, monkeypatch):
-        from src.wiki_rag import build_wiki_index
+        from wiki_rag import build_wiki_index
 
         wiki_dir = tmp_path / "wiki"
         wiki_dir.mkdir()
@@ -159,8 +159,8 @@ class TestBuildIndex:
 
         index_file = wiki_dir / "index.md"
 
-        monkeypatch.setattr("src.wiki_rag.WIKI_DIR", wiki_dir)
-        monkeypatch.setattr("src.wiki_rag.INDEX_FILE", index_file)
+        monkeypatch.setattr("wiki_rag.WIKI_DIR", wiki_dir)
+        monkeypatch.setattr("wiki_rag.INDEX_FILE", index_file)
 
         result = build_wiki_index()
         assert result == index_file
@@ -171,14 +171,14 @@ class TestBuildIndex:
         assert "2 篇文章" in content
 
     def test_build_wiki_index_empty(self, tmp_path, monkeypatch):
-        from src.wiki_rag import build_wiki_index
+        from wiki_rag import build_wiki_index
 
         wiki_dir = tmp_path / "wiki"
         wiki_dir.mkdir()
         index_file = wiki_dir / "index.md"
 
-        monkeypatch.setattr("src.wiki_rag.WIKI_DIR", wiki_dir)
-        monkeypatch.setattr("src.wiki_rag.INDEX_FILE", index_file)
+        monkeypatch.setattr("wiki_rag.WIKI_DIR", wiki_dir)
+        monkeypatch.setattr("wiki_rag.INDEX_FILE", index_file)
 
         build_wiki_index()
         content = index_file.read_text()
@@ -189,8 +189,8 @@ class TestQuery:
     """查询逻辑"""
 
     def test_query_with_empty_index(self, tmp_path, monkeypatch):
-        from src.wiki_rag import query
-        monkeypatch.setattr("src.wiki_rag.STORAGE_DIR", tmp_path / "nonexistent")
+        from wiki_rag import query
+        monkeypatch.setattr("wiki_rag.STORAGE_DIR", tmp_path / "nonexistent")
         result = query("test question")
         assert "知识库为空" in result
 
@@ -199,12 +199,12 @@ class TestAdd:
     """添加条目"""
 
     def test_add_smart_creates_files(self, tmp_path, monkeypatch):
-        from src.wiki_rag import cmd_add_smart
+        from wiki_rag import cmd_add_smart
         monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-        monkeypatch.setattr("src.wiki_rag.DEEPSEEK_API_KEY", "test-key")
+        monkeypatch.setattr("wiki_rag.DEEPSEEK_API_KEY", "test-key")
 
         raw_dir = tmp_path / "raw"
-        monkeypatch.setattr("src.wiki_rag.RAW_DIR", raw_dir)
+        monkeypatch.setattr("wiki_rag.RAW_DIR", raw_dir)
 
         mock_resp = MagicMock()
         mock_resp.choices = [MagicMock(message=MagicMock(
@@ -225,18 +225,18 @@ class TestChunking:
     """chunk切分逻辑"""
 
     def test_chunk_respects_size(self):
-        from src.wiki_rag import CHUNK_SIZE, _chunk_text
+        from wiki_rag import CHUNK_SIZE, _chunk_text
         para = "这是一个很长的句子，用来测试切分逻辑。" * 100
         chunks = _chunk_text(para)
         assert chunks
         assert all(len(c) <= CHUNK_SIZE for c in chunks)
 
     def test_short_paragraph_filtered(self):
-        from src.wiki_rag import _chunk_text
+        from wiki_rag import _chunk_text
         assert _chunk_text("太短") == []
 
     def test_normal_paragraph_kept_whole(self):
-        from src.wiki_rag import _chunk_text
+        from wiki_rag import _chunk_text
         text = "这是一个足够长的段落，长度超过二十个字符，应当被完整保留为一个chunk。"
         assert _chunk_text(text) == [text]
 
@@ -245,14 +245,14 @@ class TestKeywordFallback:
     """关键词bigram匹配"""
 
     def test_bigram_overlap(self):
-        from src.wiki_rag import _extract_bigrams
+        from wiki_rag import _extract_bigrams
         q = _extract_bigrams("Python装饰器是什么")
         c = _extract_bigrams("装饰器是Python的语言特性")
         assert len(q & c) > 0
 
     def test_query_no_match_returns_message(self, tmp_path, monkeypatch):
-        import src.wiki_rag as mod
-        from src.wiki_rag import query
+        import wiki_rag as mod
+        from wiki_rag import query
 
         storage = tmp_path / "storage"
         storage.mkdir()
@@ -275,8 +275,8 @@ class TestIncrementalIndex:
     """向量索引文件级增量"""
 
     def test_reuse_unchanged_file(self, tmp_path, monkeypatch):
-        import src.wiki_rag as mod
-        from src.wiki_rag import build_vector_index
+        import wiki_rag as mod
+        from wiki_rag import build_vector_index
 
         wiki = tmp_path / "wiki"
         wiki.mkdir()
@@ -299,6 +299,42 @@ class TestIncrementalIndex:
         assert len(calls) == 1
         build_vector_index()  # hash未变，应复用，不重复嵌入
         assert len(calls) == 1
+
+
+class TestIndexCount:
+    """索引页index.md自身不计入文章数"""
+
+    def test_index_file_not_counted(self, tmp_path, monkeypatch):
+        from wiki_rag import build_wiki_index
+
+        wiki_dir = tmp_path / "wiki"
+        wiki_dir.mkdir()
+        (wiki_dir / "python-decorators.md").write_text("# Python装饰器\n装饰器是...")
+        (wiki_dir / "index.md").write_text("# 旧索引\n")  # 上次运行残留
+
+        monkeypatch.setattr("wiki_rag.WIKI_DIR", wiki_dir)
+        monkeypatch.setattr("wiki_rag.INDEX_FILE", wiki_dir / "index.md")
+
+        build_wiki_index()
+        content = (wiki_dir / "index.md").read_text()
+        assert "共 1 篇文章" in content
+
+
+class TestAddDirect:
+    """--no-split原样添加"""
+
+    def test_filename_from_first_heading(self, tmp_path, monkeypatch):
+        from wiki_rag import cmd_add_direct
+
+        raw_dir = tmp_path / "raw"
+        monkeypatch.setattr("wiki_rag.RAW_DIR", raw_dir)
+
+        text = "# Docker网络模式\n\nbridge、host、none三种模式..."
+        filename = cmd_add_direct(text)
+
+        assert filename == "docker网络模式.md"
+        saved = (raw_dir / filename).read_text(encoding="utf-8")
+        assert "host" in saved  # 原文原样保存，不经过LLM改写
 
 
 class TestRawDataExists:
