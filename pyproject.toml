@@ -1,15 +1,12 @@
 [project]
 name = "wiki-rag"
 version = "0.1.0"
-description = "个人Wiki RAG系统 - Karpathy范式的LlamaIndex实现"
+description = "个人Wiki知识库RAG - LLM编译Wiki + 本地向量检索"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "llama-index>=0.12.0",
-    "llama-index-llms-ollama>=0.5.0",
-    "llama-index-embeddings-ollama>=0.5.0",
-    "llama-index-vector-stores-faiss>=0.3.0",
-    "faiss-cpu>=1.7.0",
+    "numpy>=1.26",
+    "ollama>=0.3",
     "openai>=2.31.0",
 ]
 

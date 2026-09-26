@@ -1,19 +1,19 @@
 # Wiki RAG - 个人知识库系统
 
-> Karpathy范式的LlamaIndex实现，用Ollama本地模型搭建可闭环的MVP
+> Karpathy 范式的活 Wiki + 轻量向量检索：不依赖向量数据库，一个 Python 文件跑通全链路
 
 ## 架构设计
 
 ```
 raw/           → 原始知识素材（Markdown笔记）
-wiki/          → LLM编译后的结构化Wiki文章  
-storage/       → 向量索引（JSON格式）
+wiki/          → LLM编译后的结构化Wiki文章
+storage/       → 向量索引（JSON格式，文件级增量）
 wiki/index.md  → 全局索引目录
 ```
 
 **核心流程：**
-1. `compile` — raw笔记 → LLM编译为结构化wiki文章
-2. `build_index` — wiki文章 → 全局索引 + 向量索引
+1. `add` — 添加原始素材，LLM 自动拆分多主题
+2. `compile` — raw笔记 → LLM编译为结构化wiki文章 + 构建索引
 3. `query` — 用户提问 → 向量检索 → LLM回答
 
 ## 快速开始
@@ -22,28 +22,32 @@ wiki/index.md  → 全局索引目录
 # 1. 安装依赖
 uv sync
 
-# 2. 确保Ollama在运行，需要以下模型
-ollama pull deepseek-r1:1.5b     # LLM
-ollama pull nomic-embed-text      # Embedding
+# 2. 配置 LLM（默认 DeepSeek API）
+export DEEPSEEK_API_KEY=sk-xxx
+# 也可切换到本地 Ollama：
+#   export WIKI_USE_LOCAL_LLM=1 && ollama pull deepseek-r1:1.5b
 
-# 3. 编译raw → wiki
+# 3. Embedding 始终走本地 Ollama
+ollama pull nomic-embed-text
+
+# 4. 编译raw → wiki
 uv run python -m src.wiki_rag compile
 
-# 4. 查询
+# 5. 查询
 uv run python -m src.wiki_rag query "Python装饰器是什么"
 
-# 5. 添加新知识
-uv run python -m src.wiki_rag add "新主题" "笔记内容..."
+# 6. 添加新知识（文件或直接文本，自动拆分多主题）
+uv run python -m src.wiki_rag add notes.md
+uv run python -m src.wiki_rag add --text "一段包含多个主题的笔记..."
 uv run python -m src.wiki_rag compile  # 重新编译
 ```
 
 ## 技术栈
 
-- **LLM**: Ollama (deepseek-r1:1.5b)
-- **Embedding**: Ollama (nomic-embed-text, 768维)
-- **向量检索**: 余弦相似度（numpy）
+- **LLM**: DeepSeek API（默认）/ 本地 Ollama（`WIKI_USE_LOCAL_LLM=1`）
+- **Embedding**: Ollama（nomic-embed-text, 768维）
+- **向量检索**: numpy 余弦相似度，矩阵化一次计算
 - **存储**: JSON文件（MVP级，可扩展为FAISS/Chroma）
-- **框架**: LlamaIndex + 直接ollama SDK
 
 ## 设计理念
 
@@ -59,7 +63,6 @@ uv run python -m src.wiki_rag compile  # 重新编译
 
 ```bash
 uv run pytest tests/ -v
-# 13 passed
 ```
 
 ## 仓库
